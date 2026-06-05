@@ -174,7 +174,7 @@ async function cacheAndStream(req, res, localPath, originUrl) {
     await fsp.rename(tempPath, localPath);
   } catch (error) {
     await fsp.rm(tempPath, { force: true }).catch((cleanupError) => {
-      console.error('Failed to clean partial cache:', cleanupError.message);
+      console.error(`Failed to clean partial cache ${path.basename(tempPath)}: ${cleanupError.message}`);
     });
     throw error;
   }
@@ -186,14 +186,12 @@ app.get('/healthz', (_req, res) => {
 
 app.head('/stream/:movieId', streamLimiter, async (req, res) => {
   const movieId = String(req.params.movieId || '').trim();
-  const safeMovieId = movieId.replace(/[^a-zA-Z0-9_-]/g, '');
-
-  if (!safeMovieId) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(movieId)) {
     res.status(400).end();
     return;
   }
 
-  const localPath = path.join(TMP_DIR, `${safeMovieId}.mp4`);
+  const localPath = path.join(TMP_DIR, `${movieId}.mp4`);
 
   try {
     if (fs.existsSync(localPath)) {
@@ -205,7 +203,7 @@ app.head('/stream/:movieId', streamLimiter, async (req, res) => {
       return;
     }
 
-    const originUrl = await getOriginUrl(safeMovieId);
+    const originUrl = await getOriginUrl(movieId);
     let upstream = await fetch(originUrl, { method: 'HEAD' });
 
     if (upstream.status === 405 || upstream.status === 501) {
@@ -222,14 +220,12 @@ app.head('/stream/:movieId', streamLimiter, async (req, res) => {
 
 app.get('/stream/:movieId', streamLimiter, async (req, res) => {
   const movieId = String(req.params.movieId || '').trim();
-  const safeMovieId = movieId.replace(/[^a-zA-Z0-9_-]/g, '');
-
-  if (!safeMovieId) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(movieId)) {
     res.status(400).json({ error: 'Invalid movieId' });
     return;
   }
 
-  const localPath = path.join(TMP_DIR, `${safeMovieId}.mp4`);
+  const localPath = path.join(TMP_DIR, `${movieId}.mp4`);
   let startedDownload = false;
 
   try {
@@ -239,7 +235,7 @@ app.get('/stream/:movieId', streamLimiter, async (req, res) => {
       return;
     }
 
-    const originUrl = await getOriginUrl(safeMovieId);
+    const originUrl = await getOriginUrl(movieId);
 
     if (isDownloading) {
       res.setHeader('X-Cache-Status', 'bypassed');

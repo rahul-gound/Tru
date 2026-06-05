@@ -8,6 +8,7 @@ const searchInput = document.querySelector('#search');
 const results = document.querySelector('#results');
 const player = document.querySelector('#player');
 const statusEl = document.querySelector('#status');
+const EDGE_HEALTH_TIMEOUT_MS = 2500;
 
 let searchTimer;
 let activeMovie = null;
@@ -24,6 +25,14 @@ const toAbsoluteUrl = (value) => {
     return value || '';
   }
 };
+
+const hasValidConfig =
+  config &&
+  config.endpoint &&
+  config.projectId &&
+  config.databaseId &&
+  !String(config.projectId).includes('YOUR_PROJECT_ID') &&
+  !String(config.databaseId).includes('YOUR_DATABASE_ID');
 
 async function loadMovies(term = '') {
   const queries = term ? [Query.search('title', term.trim())] : [];
@@ -56,8 +65,11 @@ function renderMovies(movies) {
 }
 
 async function checkEdgeHealth(url) {
+  if (!url) {
+    return false;
+  }
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
+  const timeout = setTimeout(() => controller.abort(), EDGE_HEALTH_TIMEOUT_MS);
   try {
     const response = await fetch(url, { method: 'HEAD', signal: controller.signal });
     return response.ok;
@@ -102,8 +114,13 @@ async function trackViewOnce(movie) {
 }
 
 async function playWithFailover(movie) {
+  if (!movie?.hf_stream_url && !movie?.mobile_fallback_url) {
+    setStatus('No stream URL available for this movie.');
+    return;
+  }
+
   const edgeIsHealthy = await checkEdgeHealth(movie.hf_stream_url);
-  const streamUrl = edgeIsHealthy ? movie.hf_stream_url : movie.mobile_fallback_url;
+  const streamUrl = edgeIsHealthy && movie.hf_stream_url ? movie.hf_stream_url : movie.mobile_fallback_url;
 
   if (!edgeIsHealthy) {
     await logCriticalIssue('EDGE_UNAVAILABLE');
@@ -129,9 +146,13 @@ player.addEventListener('error', async () => {
     return;
   }
 
-  if (toAbsoluteUrl(player.currentSrc) !== toAbsoluteUrl(activeMovie.mobile_fallback_url)) {
+  const current = toAbsoluteUrl(player.currentSrc);
+  const edge = toAbsoluteUrl(activeMovie.hf_stream_url);
+  const fallback = toAbsoluteUrl(activeMovie.mobile_fallback_url);
+
+  if (current === edge && current !== fallback) {
     await logCriticalIssue('EDGE_STREAM_PLAYBACK_ERROR');
-    player.src = activeMovie.mobile_fallback_url;
+    player.src = fallback;
     player.load();
     player.play().catch(() => {
       setStatus('Playback failed. Please retry.');
@@ -143,6 +164,11 @@ player.addEventListener('error', async () => {
 });
 
 searchInput.addEventListener('input', () => {
+  if (!hasValidConfig) {
+    setStatus('Configure APPWRITE_CONFIG before using the app.');
+    return;
+  }
+
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     void loadMovies(searchInput.value).catch((error) => {
@@ -152,7 +178,11 @@ searchInput.addEventListener('input', () => {
   }, 200);
 });
 
-void loadMovies().catch((error) => {
-  console.error(error);
-  setStatus('Failed to load movies.');
-});
+if (!hasValidConfig) {
+  setStatus('Configure APPWRITE_CONFIG before using the app.');
+} else {
+  void loadMovies().catch((error) => {
+    console.error(error);
+    setStatus('Failed to load movies.');
+  });
+}
