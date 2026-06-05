@@ -10,7 +10,11 @@ const { Readable, PassThrough } = require('node:stream');
 const app = express();
 const PORT = Number(process.env.PORT || 7860);
 const TMP_DIR = '/tmp';
-const MOVIE_BASE_URL = process.env.MOBILE_ORIGIN_BASE_URL || '';
+const MOBILE_BASE_URL = process.env.MOBILE_ORIGIN_BASE_URL || '';
+
+const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000);
+const RATE_LIMIT_MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX_REQUESTS || 120);
+const rateLimitState = new Map();
 
 let isDownloading = false;
 
@@ -29,15 +33,15 @@ function setProxyHeaders(originResponse, res) {
 }
 
 function buildOriginUrl(movieId) {
-  if (!MOVIE_BASE_URL) {
+  if (!MOBILE_BASE_URL) {
     throw new Error('Missing MOBILE_ORIGIN_BASE_URL');
   }
 
-  return `${MOVIE_BASE_URL.replace(/\/$/, '')}/${encodeURIComponent(movieId)}.mp4`;
+  return `${MOBILE_BASE_URL.replace(/\/$/, '')}/${encodeURIComponent(movieId)}.mp4`;
 }
 
 async function getOriginUrl(movieId) {
-  if (MOVIE_BASE_URL) {
+  if (MOBILE_BASE_URL) {
     return buildOriginUrl(movieId);
   }
 
@@ -70,6 +74,28 @@ async function getOriginUrl(movieId) {
   }
 
   return movie.mobile_fallback_url;
+}
+
+function streamRateLimit(req, res, next) {
+  const now = Date.now();
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const current = rateLimitState.get(ip);
+
+  if (!current || now >= current.resetAt) {
+    rateLimitState.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    next();
+    return;
+  }
+
+  current.count += 1;
+  if (current.count > RATE_LIMIT_MAX_REQUESTS) {
+    const retryAfter = Math.ceil((current.resetAt - now) / 1000);
+    res.setHeader('Retry-After', String(Math.max(retryAfter, 1)));
+    res.status(429).json({ error: 'Too many requests' });
+    return;
+  }
+
+  next();
 }
 
 async function streamLocalFile(req, res, filePath) {
@@ -162,16 +188,20 @@ async function cacheAndStream(req, res, localPath, originUrl) {
     await Promise.all([writeCache, sendResponse]);
     await fsp.rename(tempPath, localPath);
   } catch (error) {
-    await fsp.rm(tempPath, { force: true }).catch(() => {});
+    await fsp.rm(tempPath, { force: true }).catch((cleanupError) => {
+      console.error('Failed to clean partial cache:', cleanupError.message);
+    });
     throw error;
   }
 }
+
+app.set('trust proxy', true);
 
 app.get('/healthz', (_req, res) => {
   res.status(200).json({ ok: true, isDownloading });
 });
 
-app.get('/stream/:movieId', async (req, res) => {
+app.get('/stream/:movieId', streamRateLimit, async (req, res) => {
   const movieId = String(req.params.movieId || '').trim();
   const safeMovieId = movieId.replace(/[^a-zA-Z0-9_-]/g, '');
 
