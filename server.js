@@ -180,10 +180,44 @@ async function cacheAndStream(req, res, localPath, originUrl) {
   }
 }
 
-app.set('trust proxy', true);
-
 app.get('/healthz', (_req, res) => {
   res.status(200).json({ ok: true, isDownloading });
+});
+
+app.head('/stream/:movieId', streamLimiter, async (req, res) => {
+  const movieId = String(req.params.movieId || '').trim();
+  const safeMovieId = movieId.replace(/[^a-zA-Z0-9_-]/g, '');
+
+  if (!safeMovieId) {
+    res.status(400).end();
+    return;
+  }
+
+  const localPath = path.join(TMP_DIR, `${safeMovieId}.mp4`);
+
+  try {
+    if (fs.existsSync(localPath)) {
+      const { size } = await fsp.stat(localPath);
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Content-Length', size);
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.status(200).end();
+      return;
+    }
+
+    const originUrl = await getOriginUrl(safeMovieId);
+    let upstream = await fetch(originUrl, { method: 'HEAD' });
+
+    if (upstream.status === 405 || upstream.status === 501) {
+      upstream = await fetch(originUrl, { headers: { Range: 'bytes=0-0' } });
+    }
+
+    res.status(upstream.status);
+    setProxyHeaders(upstream, res);
+    res.end();
+  } catch {
+    res.status(502).end();
+  }
 });
 
 app.get('/stream/:movieId', streamLimiter, async (req, res) => {

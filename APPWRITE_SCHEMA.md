@@ -17,7 +17,7 @@ Create the following attributes:
 | `mobile_fallback_url` | String | Yes | Origin fallback stream URL |
 
 Indexes:
-- `title_idx` (key: `title`, type: `key`) for fast lookup/search.
+- `title_idx` (key: `title`, type: `fulltext`) for `Query.search('title', ...)`.
 
 ## Collection: `Issues`
 Create the following attributes:

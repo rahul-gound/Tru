@@ -17,6 +17,14 @@ const setStatus = (message) => {
   statusEl.textContent = message;
 };
 
+const toAbsoluteUrl = (value) => {
+  try {
+    return new URL(value, window.location.href).href;
+  } catch {
+    return value || '';
+  }
+};
+
 async function loadMovies(term = '') {
   const queries = term ? [Query.search('title', term.trim())] : [];
   const response = await databases.listDocuments(config.databaseId, config.moviesCollectionId, queries);
@@ -121,7 +129,7 @@ player.addEventListener('error', async () => {
     return;
   }
 
-  if (player.currentSrc !== activeMovie.mobile_fallback_url) {
+  if (toAbsoluteUrl(player.currentSrc) !== toAbsoluteUrl(activeMovie.mobile_fallback_url)) {
     await logCriticalIssue('EDGE_STREAM_PLAYBACK_ERROR');
     player.src = activeMovie.mobile_fallback_url;
     player.load();
