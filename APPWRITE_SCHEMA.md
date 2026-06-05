@@ -31,3 +31,10 @@ Create the following attributes:
 ## Recommended Permissions
 - `Movies`: read for users/guests, write for admins.
 - `Issues`: create for clients, read/write for admins only.
+
+## Optional Collection: `Views` (for one-time view tracking)
+Only required if `viewsCollectionId` is configured in `index.html`.
+
+Suggested attributes:
+- `movie_id` (string)
+- `timestamp` (string, ISO-8601)

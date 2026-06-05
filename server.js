@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
@@ -14,7 +15,13 @@ const MOBILE_BASE_URL = process.env.MOBILE_ORIGIN_BASE_URL || '';
 
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000);
 const RATE_LIMIT_MAX_REQUESTS = Number(process.env.RATE_LIMIT_MAX_REQUESTS || 120);
-const rateLimitState = new Map();
+const streamLimiter = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  limit: RATE_LIMIT_MAX_REQUESTS,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests' }
+});
 
 let isDownloading = false;
 
@@ -74,28 +81,6 @@ async function getOriginUrl(movieId) {
   }
 
   return movie.mobile_fallback_url;
-}
-
-function streamRateLimit(req, res, next) {
-  const now = Date.now();
-  const ip = req.ip || req.socket.remoteAddress || 'unknown';
-  const current = rateLimitState.get(ip);
-
-  if (!current || now >= current.resetAt) {
-    rateLimitState.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
-    next();
-    return;
-  }
-
-  current.count += 1;
-  if (current.count > RATE_LIMIT_MAX_REQUESTS) {
-    const retryAfter = Math.ceil((current.resetAt - now) / 1000);
-    res.setHeader('Retry-After', String(Math.max(retryAfter, 1)));
-    res.status(429).json({ error: 'Too many requests' });
-    return;
-  }
-
-  next();
 }
 
 async function streamLocalFile(req, res, filePath) {
@@ -201,7 +186,7 @@ app.get('/healthz', (_req, res) => {
   res.status(200).json({ ok: true, isDownloading });
 });
 
-app.get('/stream/:movieId', streamRateLimit, async (req, res) => {
+app.get('/stream/:movieId', streamLimiter, async (req, res) => {
   const movieId = String(req.params.movieId || '').trim();
   const safeMovieId = movieId.replace(/[^a-zA-Z0-9_-]/g, '');
 
@@ -215,6 +200,7 @@ app.get('/stream/:movieId', streamRateLimit, async (req, res) => {
 
   try {
     if (fs.existsSync(localPath)) {
+      res.setHeader('X-Cache-Status', 'hit');
       await streamLocalFile(req, res, localPath);
       return;
     }
@@ -222,12 +208,14 @@ app.get('/stream/:movieId', streamRateLimit, async (req, res) => {
     const originUrl = await getOriginUrl(safeMovieId);
 
     if (isDownloading) {
+      res.setHeader('X-Cache-Status', 'bypassed');
       await proxyDirect(req, res, originUrl);
       return;
     }
 
     isDownloading = true;
     startedDownload = true;
+    res.setHeader('X-Cache-Status', 'miss');
     await cacheAndStream(req, res, localPath, originUrl);
   } catch (error) {
     if (!res.headersSent) {

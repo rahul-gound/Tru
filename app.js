@@ -47,12 +47,16 @@ function renderMovies(movies) {
   }
 }
 
-async function hfHealthy(url) {
+async function checkEdgeHealth(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
   try {
-    const response = await fetch(url, { method: 'HEAD' });
+    const response = await fetch(url, { method: 'HEAD', signal: controller.signal });
     return response.ok;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -90,7 +94,7 @@ async function trackViewOnce(movie) {
 }
 
 async function playWithFailover(movie) {
-  const edgeIsHealthy = await hfHealthy(movie.hf_stream_url);
+  const edgeIsHealthy = await checkEdgeHealth(movie.hf_stream_url);
   const streamUrl = edgeIsHealthy ? movie.hf_stream_url : movie.mobile_fallback_url;
 
   if (!edgeIsHealthy) {
